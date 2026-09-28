@@ -129,6 +129,50 @@ tape.test("writer & reader", function(test) {
         test.end();
     });
 
+    test.throws(function() {
+      const root = protobuf.Root.fromJSON({
+        nested: {
+          MyMessage: {
+            fields: {
+              name: { type: "string", id: 1 }
+            }
+          }
+        }
+      });
+      const MyMessage = root.lookupType("MyMessage");
+      // 0x7B (field 15, wire type 3 = start group)
+      const payload = Buffer.alloc(50000, 0x7B);
+      MyMessage.decode(payload);
+    }, /maximum nesting depth exceeded/, "limits recursion in reader");
+
+    test.test(test.name + " - should not decode overlong UTF-8 strings", function(test) {
+        var root = protobuf.Root.fromJSON({
+            nested: {
+                Named: {
+                    fields: {
+                        name: { type: "string", id: 1 }
+                    }
+                }
+            }
+        });
+        var Named = root.lookupType("Named");
+        [
+            [0xC0, 0x80],             // U+0000 encoded as two bytes
+            [0xE0, 0x81, 0xBF],       // U+007F encoded as three bytes
+            [0xF0, 0x80, 0x9F, 0xBF], // U+07FF encoded as four bytes
+            [0xF4, 0x90, 0x80, 0x80]  // >U+10FFFF encoded as four bytes
+        ].forEach(function(bytes) {
+            var reader = Reader.create(new Uint8Array([bytes.length].concat(bytes)));
+            test.notOk(reader instanceof protobuf.BufferReader, "should use the array reader for Uint8Array input");
+            test.equal(reader.string(), "�", "should read overlong sequence " + JSON.stringify(bytes) + " as a replacement character");
+
+            // field 1, wire type 2 (length delimited)
+            var payload = new Uint8Array([1 << 3 | 2, bytes.length].concat(bytes));
+            test.equal(Named.decode(payload).name, "�", "should decode overlong sequence " + JSON.stringify(bytes) + " in a string field as a replacement character");
+        });
+        test.end();
+    });
+
     test.end();
 });
 
